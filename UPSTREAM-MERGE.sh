@@ -52,10 +52,15 @@ if ! git merge "$remote_branch"; then
   echo "Failed to merge $remote_branch, aborting."
   exit 1
 fi
-# Replace a leftover local rebase branch from a prior failed attempt when running in CI.
+# Delete a leftover local rebase branch only in CI / when explicitly allowed.
 if git show-ref --verify --quiet "refs/heads/${version}-rebase-${rebase_branch}"; then
-  echo "Deleting existing local branch ${version}-rebase-${rebase_branch}"
-  git branch -D "${version}-rebase-${rebase_branch}"
+  if [[ "${ALLOW_BRANCH_DELETE:-0}" == "1" ]]; then
+    echo "Deleting existing local branch ${version}-rebase-${rebase_branch}"
+    git branch -D "${version}-rebase-${rebase_branch}"
+  else
+    echo "Local branch ${version}-rebase-${rebase_branch} already exists. Delete it manually or set ALLOW_BRANCH_DELETE=1."
+    exit 1
+  fi
 fi
 git checkout -b "$version"-rebase-"$rebase_branch" || { echo "Expected branch $version-rebase-$rebase_branch to not exist, delete and retry."; exit 1; }
 

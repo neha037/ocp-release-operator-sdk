@@ -54,7 +54,9 @@ rather than tracking a branch. That wrapper:
 3. Updates golang builder pins in `.ci-operator.yaml` and
    `release/helm/Dockerfile` if the upstream golang version changed.
 4. Verifies patches and build with `make -f ci/prow.Makefile patch build`.
-5. Pushes `$tag-rebase-main` and opens a PR. It does **not** auto-merge.
+5. Pushes `$tag-rebase-main` and opens a PR. If the gate failed, a **draft**
+   PR is opened and the periodic exits non-zero so CI alerts. It does **not**
+   auto-merge.
 
 **Still manual after the bot opens a PR:** review conflict fallout, fix or drop
 patches that no longer apply, add any needed `UPSTREAM: <carry>:` commits, and

@@ -20,6 +20,8 @@
 #   FORCE_ORIGIN_URL       If set to 1, allow rewriting an existing origin remote whose
 #                          org/repo differs from DEST_ORG_REPO (e.g. a developer fork).
 #                          Default 0 — the script aborts instead to protect local config.
+#   ALLOW_BRANCH_DELETE     If set to 1, allow deleting stale local rebase branches.
+#                          Automatically enabled in CI (OPENSHIFT_CI / CI / JOB_NAME).
 #   GIT_AUTHOR_NAME        Git identity for commits (default: openshift-app-platform-shift-bot).
 #   GIT_AUTHOR_EMAIL       Git identity email (default: 267347085+openshift-app-platform-shift-bot@users.noreply.github.com).
 #
@@ -44,11 +46,31 @@ GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-267347085+openshift-app-platform-shift-bot@
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+is_ci_context() {
+  [[ -n "${OPENSHIFT_CI:-}" || -n "${CI:-}" || -n "${JOB_NAME:-}" ]]
+}
+
+maybe_delete_stale_branch() {
+  local branch=$1
+  git show-ref --verify --quiet "refs/heads/${branch}" || return 0
+  if is_ci_context || [[ "${ALLOW_BRANCH_DELETE:-0}" == "1" ]]; then
+    log "Deleting stale local branch ${branch}"
+    git branch -D "$branch"
+    return 0
+  fi
+  die "Local branch ${branch} already exists. Delete it manually or set ALLOW_BRANCH_DELETE=1."
+}
+
 # Compare release-only semver tags (vMAJOR.MINOR.PATCH). sort -V does not
 # guarantee correct ordering for pre-release suffixes.
 version_gt() {
   local a=${1#v} b=${2#v}
   [[ "$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -n1)" == "$a" && "$a" != "$b" ]]
+}
+
+_redact_url() {
+  local url=$1
+  printf '%s\n' "${url//:\/\/*@/:\/\/***@}"
 }
 
 # Extract owner/repo from a GitHub URL (strips scheme, host, .git, trailing slash).
@@ -79,7 +101,7 @@ ensure_remote() {
           die "Origin remote points at ${cur_repo} but expected ${exp_repo}. Set FORCE_ORIGIN_URL=1 to overwrite, or set ORIGIN_URL to match your fork."
         fi
       fi
-      log "Rewriting remote ${name}: ${current} -> ${url}"
+      log "Rewriting remote ${name}: $(_redact_url "$current") -> $(_redact_url "$url")"
       git remote set-url "$name" "$url"
     fi
   else
@@ -89,6 +111,12 @@ ensure_remote() {
 
 load_github_token() {
   [[ -n "${GITHUB_TOKEN:-}" ]]
+}
+
+setup_gh() {
+  load_github_token || die "GITHUB_TOKEN required for GitHub API operations"
+  ensure_gh
+  export GH_TOKEN="$GITHUB_TOKEN"
 }
 
 configure_git_identity() {
@@ -216,6 +244,7 @@ run_patch_gate() {
   git checkout -- . 2>&1 || true
   rm -rf build/
   find . -name '*.orig' -not -path './.git/*' -delete 2>/dev/null || true
+  find . -name '*.rej' -not -path './.git/*' -delete 2>/dev/null || true
   return "$failed"
 }
 
@@ -240,12 +269,10 @@ Automated rebase of downstream Helm Operator midstream onto upstream Operator SD
 - [ ] Presubmit unit / sanity / e2e-helm
 EOF
 )
-  # WIP label may not exist in the repo; fall back to unlabeled PR.
   if [[ "$patch_ok" != "1" ]]; then
     gh pr create --repo "$DEST_ORG_REPO" --base "$REBASE_BRANCH" --head "$branch" \
-      --title "$title" --body "$body" --label "do-not-merge/work-in-progress" \
-      || gh pr create --repo "$DEST_ORG_REPO" --base "$REBASE_BRANCH" --head "$branch" \
-        --title "$title" --body "$body"
+      --title "WIP: ${title}" --body "$body" --draft \
+      || die "Failed to create draft PR for ${branch}"
   else
     gh pr create --repo "$DEST_ORG_REPO" --base "$REBASE_BRANCH" --head "$branch" \
       --title "$title" --body "$body"
@@ -280,9 +307,21 @@ main() {
   branch="${tag}-rebase-${REBASE_BRANCH}"
   log "Candidate rebase: ${pin} -> ${tag} (branch ${branch})"
 
-  # Check remote branch existence using URL directly (no remote rewrite needed).
+  # If the remote branch already exists, only open a PR when one is missing.
+  # This recovers from a prior run where push succeeded but gh pr create failed.
   if git ls-remote --exit-code --heads "$ORIGIN_URL" "$branch" >/dev/null 2>&1; then
-    log "Remote branch ${branch} already exists; skipping"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      log "DRY_RUN=1: remote branch ${branch} exists; would open PR if none is open"
+      exit 0
+    fi
+    setup_gh
+    if open_pr_exists "$tag"; then
+      log "Open PR for ${tag} already exists; skipping"
+      exit 0
+    fi
+    log "Remote branch ${branch} exists with no open PR; creating PR"
+    create_pr "$tag" "$branch" 1 "$pin"
+    log "Auto-rebase PR recovery complete for ${tag}"
     exit 0
   fi
 
@@ -319,13 +358,13 @@ main() {
   git checkout -B "$REBASE_BRANCH" "$ORIGIN_REMOTE/$REBASE_BRANCH"
   git branch --set-upstream-to="$ORIGIN_REMOTE/$REBASE_BRANCH" "$REBASE_BRANCH"
 
-  # Drop a stale local rebase branch from a previous attempt.
-  if git show-ref --verify --quiet "refs/heads/${branch}"; then
-    git branch -D "$branch"
-  fi
+  maybe_delete_stale_branch "$branch"
 
   trap 'log "FAILED (rc=$?) on branch $(git rev-parse --abbrev-ref HEAD 2>/dev/null)"' ERR
 
+  if is_ci_context; then
+    export ALLOW_BRANCH_DELETE=1
+  fi
   log "Running UPSTREAM-MERGE.sh ${tag} ${REBASE_BRANCH} ${UPSTREAM_REMOTE}"
   ./UPSTREAM-MERGE.sh "$tag" "$REBASE_BRANCH" "$UPSTREAM_REMOTE"
 
@@ -347,6 +386,9 @@ main() {
 
   log "Opening pull request"
   create_pr "$tag" "$branch" "$patch_ok" "$pin"
+  if [[ "$patch_ok" != "1" ]]; then
+    die "Patch gate failed; draft PR opened for manual fixes"
+  fi
   log "Auto-rebase complete for ${tag}"
 }
 
