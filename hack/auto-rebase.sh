@@ -119,9 +119,37 @@ setup_gh() {
   export GH_TOKEN="$GITHUB_TOKEN"
 }
 
+_cleanup_items=()
+_cleanup() {
+  for item in "${_cleanup_items[@]}"; do
+    case "$item" in
+      file:*)  rm -f "${item#file:}" ;;
+      git_identity)
+        if [[ -n "${_orig_git_name+set}" ]]; then
+          git config user.name "$_orig_git_name" 2>/dev/null || git config --unset user.name 2>/dev/null || true
+        else
+          git config --unset user.name 2>/dev/null || true
+        fi
+        if [[ -n "${_orig_git_email+set}" ]]; then
+          git config user.email "$_orig_git_email" 2>/dev/null || git config --unset user.email 2>/dev/null || true
+        else
+          git config --unset user.email 2>/dev/null || true
+        fi
+        ;;
+      git_credential)
+        git config --unset credential.helper 2>/dev/null || true
+        ;;
+    esac
+  done
+}
+trap _cleanup EXIT
+
 configure_git_identity() {
+  _orig_git_name=$(git config user.name 2>/dev/null) || true
+  _orig_git_email=$(git config user.email 2>/dev/null) || true
   git config user.name "$GIT_AUTHOR_NAME"
   git config user.email "$GIT_AUTHOR_EMAIL"
+  _cleanup_items+=(git_identity)
 }
 
 _CRED_CONFIGURED=0
@@ -133,8 +161,7 @@ setup_credential_helper() {
   chmod 600 "$cred_file"
   printf 'https://x-access-token:%s@github.com\n' "$GITHUB_TOKEN" >"$cred_file"
   git config credential.helper "store --file=${cred_file}"
-  # shellcheck disable=SC2064
-  trap "rm -f '${cred_file}'" EXIT
+  _cleanup_items+=("file:${cred_file}" git_credential)
   _CRED_CONFIGURED=1
 }
 
@@ -177,15 +204,17 @@ current_pin() {
 
 newest_upstream_tag() {
   local pin=$1 tag newest=""
-  while IFS= read -r tag; do
-    # Release tags only: vMAJOR.MINOR.PATCH
+  # Query upstream directly so local/destination tags cannot pollute results.
+  while IFS=$'\t' read -r _ ref; do
+    tag=${ref#refs/tags/}
+    # Release tags only: vMAJOR.MINOR.PATCH (skip ^{} dereferenced entries)
     [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
     if version_gt "$tag" "$pin"; then
       if [[ -z "$newest" ]] || version_gt "$tag" "$newest"; then
         newest=$tag
       fi
     fi
-  done < <(git tag -l 'v*' --sort=-v:refname)
+  done < <(git ls-remote --tags "$UPSTREAM_URL" 'v*')
   printf '%s\n' "$newest"
 }
 
@@ -319,8 +348,10 @@ main() {
       log "Open PR for ${tag} already exists; skipping"
       exit 0
     fi
-    log "Remote branch ${branch} exists with no open PR; creating PR"
-    create_pr "$tag" "$branch" 1 "$pin"
+    # Use patch_ok=0 (draft) because we cannot verify whether the prior run's
+    # gate passed or failed; a human can mark it ready-for-review after checking.
+    log "Remote branch ${branch} exists with no open PR; creating draft PR (recovery)"
+    create_pr "$tag" "$branch" 0 "$pin"
     log "Auto-rebase PR recovery complete for ${tag}"
     exit 0
   fi
@@ -358,13 +389,16 @@ main() {
   git checkout -B "$REBASE_BRANCH" "$ORIGIN_REMOTE/$REBASE_BRANCH"
   git branch --set-upstream-to="$ORIGIN_REMOTE/$REBASE_BRANCH" "$REBASE_BRANCH"
 
+  # Export before maybe_delete_stale_branch so both the wrapper and
+  # UPSTREAM-MERGE.sh (child process) use the same CI-aware policy.
+  if is_ci_context; then
+    export ALLOW_BRANCH_DELETE=1
+  fi
+
   maybe_delete_stale_branch "$branch"
 
   trap 'log "FAILED (rc=$?) on branch $(git rev-parse --abbrev-ref HEAD 2>/dev/null)"' ERR
 
-  if is_ci_context; then
-    export ALLOW_BRANCH_DELETE=1
-  fi
   log "Running UPSTREAM-MERGE.sh ${tag} ${REBASE_BRANCH} ${UPSTREAM_REMOTE}"
   ./UPSTREAM-MERGE.sh "$tag" "$REBASE_BRANCH" "$UPSTREAM_REMOTE"
 
