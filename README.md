@@ -6,10 +6,35 @@ This is the downstream repo for the
 [Operator Framework's Operator SDK][upstream_repo]. The purpose of this repo is
 to build downstream Operator SDK for OpenShift releases.
 
+## Prerequisites / Quick Start
+
+- **Go 1.26.3+** (see `go.mod` for the exact version)
+- **make** as the build system
+- The build tag `containers_image_openpgp` is required for all Go commands:
+  ```
+  go build -tags containers_image_openpgp ./...
+  go test -tags containers_image_openpgp ./...
+  ```
+  The Makefile sets this automatically, so prefer `make build` and `make test-unit` over raw `go` commands.
+
 ## Documentation
 
 The downstream documentation can be found: [Downstream Docs][downstream_docs].
 You can also refer to the upstream [Operator SDK website][sdk-docs].
+
+For contributors and AI agents, see the detailed development guides:
+
+- [AGENTS.md](AGENTS.md) -- Repository conventions, code style, build targets, and architectural context
+- [docs/build-release-guidelines.md](docs/build-release-guidelines.md) -- Downstream fork workflow, patches, CI/CD, container images
+- [docs/testing-guidelines.md](docs/testing-guidelines.md) -- Test framework, layout, and conventions
+- [docs/api-contracts-guidelines.md](docs/api-contracts-guidelines.md) -- OLM API groups, CRD conventions, CSV descriptors
+- [docs/cli-architecture-guidelines.md](docs/cli-architecture-guidelines.md) -- Command structure, plugin system, logging
+- [docs/code-generation-guidelines.md](docs/code-generation-guidelines.md) -- Template machinery, scaffold patterns
+- [docs/error-handling-guidelines.md](docs/error-handling-guidelines.md) -- Error wrapping, reconciler errors, validation
+- [docs/integration-guidelines.md](docs/integration-guidelines.md) -- OLM lifecycle, webhook integration, Helm watches
+- [docs/kubernetes-operator-patterns-guidelines.md](docs/kubernetes-operator-patterns-guidelines.md) -- Reconciliation loop, finalizers, owner refs
+- [docs/performance-guidelines.md](docs/performance-guidelines.md) -- Concurrency, caching, watch efficiency
+- [docs/security-guidelines.md](docs/security-guidelines.md) -- RBAC, TLS, container security, credential handling
 
 ## License
 
@@ -23,6 +48,7 @@ This repo is a mirror of the upstream
 The downstream ci files are as follows:
 
 * ci - contains the CI related build files
+* docs - contains development guidelines for contributors and AI agents
 * patches - contains the patches applied to downstream builds
 * release/ansible - ansible operator release files
 * release/helm - helm operator release files
@@ -318,7 +344,7 @@ Let's walk through an example. Assume we need to patch
    git push origin bugxxx
    ```
 
-[downstream_docs]:https://docs.openshift.com/container-platform/4.6/operators/operator_sdk/osdk-getting-started.html
+[downstream_docs]:https://docs.openshift.com/container-platform/latest/operators/operator_sdk/osdk-getting-started.html
 [upstream_repo]:https://github.com/operator-framework/operator-sdk/
 [license_file]:./LICENSE
 [sdk-docs]: https://sdk.operatorframework.io

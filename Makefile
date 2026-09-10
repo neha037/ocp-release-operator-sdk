@@ -72,6 +72,33 @@ lint: setup-lint ## Run the lint check
 clean: ## Cleanup build artifacts and tool binaries.
 	rm -rf $(BUILD_DIR) dist $(TOOLS_DIR)
 
+##@ Verification
+
+.PHONY: setup
+setup: ## One-time bootstrap for a clean checkout (no cluster required).
+	git submodule update --init --recursive website/
+	$(GO) mod download
+	$(MAKE) setup-lint
+
+.PHONY: verify
+verify: ## Canonical pre-PR check (no cluster required).
+	$(MAKE) test-static
+	$(MAKE) build
+	$(MAKE) check-file-size
+
+.PHONY: verify-file
+verify-file: ## Fast checks for a single Go file (FILE=path required).
+	@test -n "$(FILE)" || (echo "Error: FILE is required, e.g. make verify-file FILE=internal/olm/client/client.go" && exit 1)
+	./hack/verify-file.sh "$(FILE)"
+
+.PHONY: precommit
+precommit: ## Run pre-commit hooks on all files.
+	pre-commit run --all-files
+
+.PHONY: check-file-size
+check-file-size: ## Check first-party Go files against size limit.
+	./hack/check-file-size.sh
+
 ##@ Build
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -177,7 +204,8 @@ e2e_targets := test-e2e $(e2e_tests)
 .PHONY: test-e2e-setup
 export KIND_CLUSTER := osdk-test
 
-KUBEBUILDER_ASSETS = $(PWD)/$(shell $(GO) install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest && $(shell $(GO) env GOPATH)/bin/setup-envtest use $(K8S_VERSION) --bin-dir tools/bin/ -p path)
+SETUP_ENVTEST_VERSION = v0.21.0
+KUBEBUILDER_ASSETS = $(PWD)/$(shell $(GO) install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION) && $(shell $(GO) env GOPATH)/bin/setup-envtest use $(K8S_VERSION) --bin-dir tools/bin/ -p path)
 test-e2e-setup:: build dev-install cluster-create
 
 .PHONY: cluster-create
