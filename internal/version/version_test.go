@@ -29,9 +29,9 @@ func TestVersionGoIsGofmtClean(t *testing.T) {
 
 	formatted, err := format.Source(source)
 	if err != nil {
-		t.Fatalf("format version.go: %v", err)
+		t.Fatalf("Format version.go: %v", err)
 	}
 	if !bytes.Equal(source, formatted) {
-		t.Fatal("gofmt: version.go is not formatted")
+		t.Fatal("Formatting error (gofmt): version.go is not formatted")
 	}
 }
